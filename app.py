@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import os
 import pickle
@@ -118,7 +119,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Data Management Classes
+# DataManager Class
 class DataManager:
     def __init__(self):
         self.data_dir = "exam_prep_data"
@@ -200,10 +201,9 @@ class DataManager:
             return [f for f in os.listdir(pdf_dir) if f.endswith('.pdf')]
         return []
 
-# Initialize data manager
 data_manager = DataManager()
 
-# Utility Functions
+# Useful Functions
 def extract_youtube_id(url: str) -> str:
     """Extract YouTube video ID from URL"""
     patterns = [
@@ -234,21 +234,134 @@ def get_video_embed_url(video_id: str, start_time: int = 0) -> str:
     """Get YouTube embed URL with start time"""
     return f"https://www.youtube.com/embed/{video_id}?start={start_time}&autoplay=0"
 
-def open_in_firefox(url):
+def display_pdf_viewer(pdf_path):
+    """Returns parsed pdf data"""
     try:
-        # Try to find Firefox executable
-        if os.name == 'nt':  # Windows
-            firefox_path = r'C:\Program Files\Mozilla Firefox\firefox.exe'
-        elif os.name == 'posix':  # Linux/Mac
-            firefox_path = 'firefox'
+        if not os.path.exists(pdf_path):
+            st.error("PDF file not found")
+            return False        
+        pdf_name = os.path.basename(pdf_path)    
         
-        # Open URL in Firefox
-        subprocess.run([firefox_path, url])
-        return True
-    except Exception as e:
-        st.error(f"Could not open Firefox: {e}")
-        return False
+        with open(pdf_path, 'rb') as f:
+            pdf_data = f.read()
 
+        # Encode for embedding
+        b64_pdf = base64.b64encode(pdf_data).decode()
+        pdf_url = f"data:application/pdf;base64,{b64_pdf}"               
+        
+        return pdf_data,pdf_url
+        
+    except Exception as e:
+        st.error(f"Could not display PDF: {e}")
+        return False
+    
+
+@st.dialog("Profile Details")
+def profile(username):
+    username = st.session_state.username
+
+    users = data_manager.load_users()
+    user_data = data_manager.load_user_data(username)
+    
+    if username not in users:
+        st.error("User not found!")
+        return
+    
+    user_info = users[username]
+    
+    with st.container():
+                last_login = user_data.get('last_login', 'Never')
+                if last_login != 'Never':
+                    try:
+                        last_login_dt = datetime.datetime.fromisoformat(last_login)
+                        formatted_date = last_login_dt.strftime("%B %d, %Y at %I:%M %p")
+                    except:
+                        pass
+                components.html(f"""<style>.user-info{{display:flex;align-items:center;gap:15px;background:#fff;padding:20px 30px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.1)}}.logo{{height:50px;width:50px;flex-shrink:0}}.details{{display:flex;flex-direction:column;gap:8px;font-size:18px;line-height:1.4;text-align:left}}.details .username{{font-weight:700}}.details .last-login{{font-weight:700;color:#555}}</style><div class="user-info"><svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="#4A90E2"><circle cx="32" cy="32" r="30" stroke="#4A90E2" stroke-width="4" fill="#E1ECF7"/><circle cx="32" cy="24" r="10" fill="#4A90E2"/><path d="M16 50c0-8.837 7.163-16 16-16s16 7.163 16 16" fill="#4A90E2"/></svg><div class="details"><div class="username">Username: <strong>{username}</strong></div><div class="last-login">Last login: <strong>{formatted_date}</strong></div></div></div>""", height=130)
+    
+    col1, col2 = st.columns(2)    
+    with col1:
+        if st.button("🔑 Change ID & Password", use_container_width=True):
+            st.session_state.show_change_credentials = True
+            st.session_state.show_delete_confirmation = False
+    
+    with col2:
+        if st.button("🗑️ Delete User", use_container_width=True, type="secondary"):
+            st.session_state.show_delete_confirmation = True
+            st.session_state.show_change_credentials = False
+    
+    if st.session_state.get('show_change_credentials', False):
+        st.subheader("Change Credentials")        
+        new_username = st.text_input("New Username", value=username)
+        new_password = st.text_input("New Password", type="password")
+        confirm_password = st.text_input("Confirm New Password", type="password")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("💾 Save Changes"):
+                if new_password != confirm_password:
+                    st.error("Passwords don't match!")
+                elif len(new_password) < 3:
+                    st.error("Password must be at least 3 characters!")
+                elif new_username != username and new_username in users:
+                    st.error("Username already exists!")
+                else:
+                    old_user_data = users[username].copy()
+                    
+                    if new_username != username:
+                        del users[username]
+                        import shutil
+                        old_dir = data_manager.get_user_data_path(username)
+                        new_dir = data_manager.get_user_data_path(new_username)
+                        if os.path.exists(old_dir):
+                            shutil.move(old_dir, new_dir)
+                    
+                    users[new_username] = old_user_data
+                    users[new_username]['password'] = new_password
+                    
+                    data_manager.save_users(users)
+                    
+                    st.session_state.username = new_username
+                    st.session_state.show_change_credentials = False
+                    
+                    st.success("Credentials updated successfully!")
+                    st.rerun()
+        
+        with col2:
+            if st.button("❌ Cancel"):
+                st.session_state.show_change_credentials = False
+                st.rerun()
+    
+    if st.session_state.get('show_delete_confirmation', False):
+        st.subheader("⚠️ Delete User")
+        st.warning("This action cannot be undone! All your data will be permanently deleted.")
+        
+        confirm_text = st.text_input("Type 'DELETE' to confirm:")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🗑️ Confirm Delete", type="primary"):
+                if confirm_text == "DELETE":
+                    import shutil
+                    user_dir = data_manager.get_user_data_path(username)
+                    if os.path.exists(user_dir):
+                        shutil.rmtree(user_dir)
+                    
+                    del users[username]
+                    data_manager.save_users(users)
+                    
+                    st.session_state.clear()
+                    st.success("User deleted successfully!")
+                    st.rerun()
+                else:
+                    st.error("Please type 'DELETE' to confirm.")
+        
+        with col2:
+            if st.button("❌ Cancel"):
+                st.session_state.show_delete_confirmation = False
+                st.rerun()
 
 @st.dialog("Are You Sure ?")
 def del_sub(subject_name):
@@ -282,7 +395,6 @@ def del_pdf(subject,i,pdf,subject_data):
     col1 , col2 = st.columns([1,1])
     with col2:
         if st.button("👉🏻🗑️ YES", key=f"del_pdf_yes_{subject}_{i}"):                            
-                # Remove file
                 if os.path.exists(pdf['path']):
                     os.remove(pdf['path'])
                 subject_data['pdfs'].pop(i)
@@ -314,7 +426,6 @@ def register_user(username: str, password: str) -> bool:
         }
         data_manager.save_users(users)
         
-        # Create default user data
         default_data = data_manager.get_default_user_data()
         data_manager.save_user_data(username, default_data)
         return True
@@ -324,9 +435,8 @@ def register_user(username: str, password: str) -> bool:
 def render_header():
     """Render main header"""
     col1, col2 , col3 = st.columns([0.5, 0.3,0.2])
-
+    # print("\n" , st.session_state)
     with col1:
-        # Timer functionality
         if 'study_start_time' not in st.session_state:
             st.session_state.study_start_time = None
         
@@ -350,7 +460,6 @@ def render_header():
                     st.success(f"Study session saved! Duration: {format_time(int(study_time))}")
                     st.rerun()
         
-        # Display current timer
         if st.session_state.study_start_time:
             elapsed = (datetime.datetime.now() - st.session_state.study_start_time).total_seconds()
             st.info(f"⏱️ Current session: {format_time(int(elapsed))}")
@@ -361,8 +470,8 @@ def render_header():
                     del st.session_state[key]
                 st.rerun()        
     with col3:
-            if st.button(f"👤 {st.session_state.username}",disabled = False):
-                pass
+            if st.button(f"👤  {st.session_state.username}",disabled = False):
+                profile(st.session_state.username)
          
             
 def render_sidebar():   
@@ -386,7 +495,6 @@ def render_sidebar():
             elif new_subject in st.session_state.user_data['subjects']:
                 st.error("Subject already exists!")
     
-    # Display subjects
     subjects = st.session_state.user_data['subjects']
     if subjects:
         for subject_name in subjects.keys():
@@ -401,11 +509,9 @@ def render_sidebar():
     else:
         st.sidebar.info("No subjects yet. Add your first subject above!")
         
-    # Export/Import data
     st.sidebar.markdown("---")
     st.sidebar.subheader("💾 Data Management")
     
-    # Export data
     if st.sidebar.button("📤 Export Data"):
         export_data = {
             'user_data': st.session_state.user_data,
@@ -419,7 +525,6 @@ def render_sidebar():
             mime="application/json"
         )
     
-    # Import data
     uploaded_file = st.sidebar.file_uploader("📥 Import Data", type=['json'])
     if uploaded_file:
         try:
@@ -450,7 +555,6 @@ def render_video_player(video_data: Dict, subject: str, video_index: int, vid_ob
             if st.button("🗑️", key=f"delete_video_{subject}_{video_index}"):
                 del_dialog(subject,video_index,vid_obj)
 
-        # Video player
         embed_url = get_video_embed_url(video_id, last_position)
         st.markdown(f"""
             <div class="video-container">
@@ -565,19 +669,13 @@ def render_subject_content():
                 else:
                     st.error("Invalid YouTube URL")
         
-        # Display videos in 3x3 grid
         if subject_data['videos']:
-            videos = subject_data['videos']
-          
-            # Calculate number of rows needed (3 columns per row)
-            num_rows = (len(videos) + 2) // 3  
-            
+            videos = subject_data['videos']          
+            num_rows = (len(videos) + 2) // 3              
             for row in range(num_rows):
-                cols = st.columns(3)
-                
+                cols = st.columns(3)                
                 for col_idx in range(3):
-                    video_idx = row * 3 + col_idx
-                    
+                    video_idx = row * 3 + col_idx                    
                     if video_idx < len(videos):
                         with cols[col_idx]:
                             with st.container():
@@ -621,11 +719,9 @@ def render_subject_content():
             playlists = subject_data['playlists']            
             num_rows = (len(playlists) + 2) // 3              
             for row in range(num_rows):
-                cols = st.columns(3)
-                
+                cols = st.columns(3)                
                 for col_idx in range(3):
-                    playlist_idx = row * 3 + col_idx
-                    
+                    playlist_idx = row * 3 + col_idx                    
                     if playlist_idx < len(playlists):
                         with cols[col_idx]:
                             with st.container(border=True):
@@ -637,7 +733,6 @@ def render_subject_content():
     with tab3:
         st.subheader("PDF Documents")
         
-        # File upload
         uploaded_files = st.file_uploader(
             "📤 Upload PDF Files", 
             type=['pdf'], 
@@ -648,15 +743,12 @@ def render_subject_content():
         if uploaded_files:
             for uploaded_file in uploaded_files:
                 if uploaded_file.name not in [pdf['filename'] for pdf in subject_data['pdfs']]:
-                    # Save file
                     file_path = data_manager.save_pdf_file(
                         st.session_state.username, 
                         subject, 
                         uploaded_file.name, 
                         uploaded_file.read()
                     )
-                    
-                    # Add to subject data
                     new_pdf = {
                         'filename': uploaded_file.name,
                         'path': file_path,
@@ -671,19 +763,53 @@ def render_subject_content():
         
         # Display PDFs
         if subject_data['pdfs']:
-            st.markdown(f"### 📄 Read Your Files Here !")
-            
+            st.markdown(f"### 📄 Reading Section")
+           
             for i, pdf in enumerate(subject_data['pdfs']):
-              
-                with st.container():
-                    col1, col2 = st.columns([0.7, 0.3])
-                    with col1:                                
-                        if st.button(pdf['filename'],key=f"pdf_viewer_{subject}_{i}"):
-                            open_in_firefox(pdf['path'])                                               
-                    
+                pdf_data , pdf_url = display_pdf_viewer(pdf['path'])
+                
+                toggle_key = f"show_pdf_{subject}_{i}"
+
+                if toggle_key not in st.session_state:
+                    st.session_state[toggle_key] = False
+                                
+                is_showing = st.session_state[toggle_key]
+                button_text = f"❌ Hide {pdf['filename']}" if is_showing else f"📄 View {pdf['filename']}"                           
+                
+
+                with st.container():                    
+                    col1, col2 , col3 , col4 = st.columns([0.6,0.1,0.2,0.1])                    
+                    with col1:
+                        # Toggle button
+                        if st.button(button_text, key=f"pdf_toggle_{subject}_{i}",use_container_width=True):
+                            st.session_state[toggle_key] = not st.session_state[toggle_key]
+                            st.rerun()
+                        # Add some spacing
+                        if st.session_state[toggle_key]:                                            
+                            components.html(f'''
+                                <iframe src="{pdf_url}" width="100%" height="700px" type="application/pdf">
+                                    <p>Your browser does not support PDFs. 
+                                    <a href="{pdf_url}">Download the PDF</a>.</p>
+                                </iframe>
+                            ''', height=700)
                     with col2:
-                        if st.button("🗑️", key=f"delete_pdf_{subject}_{i}"):
+                         st.link_button("Open",url=pdf_url,use_container_width=True)                 
+                                           
+                    with col3:                        
+                        st.download_button(                                
+                            label="Download PDF",
+                            data=pdf_data,
+                            file_name=pdf['filename'],
+                            key=f"download_pdf_{subject}_{i}",
+                            mime="application/pdf",   
+                            icon = ":material/download:" ,
+                            use_container_width=True
+                                                     
+                        )
+                    with col4:
+                        if st.button("Delete", key=f"delete_pdf_{subject}_{i}",use_container_width=True):
                             del_pdf(subject,i,pdf,subject_data)
+
                            
         else:
             st.info("No PDF files uploaded yet. Upload your first PDF above!")
@@ -693,14 +819,12 @@ def render_analytics_dashboard():
     """Render comprehensive analytics dashboard"""
     st.header("📊 Study Analytics Dashboard")
     
-    # Overall statistics
     col1, col2, col3, col4 = st.columns(4)
     
     total_subjects = len(st.session_state.user_data['subjects'])
     total_study_time = st.session_state.user_data['total_study_time']
     total_sessions = len(st.session_state.user_data['study_sessions'])
     
-    # Calculate total content
     total_videos = sum(len(subject['videos']) for subject in st.session_state.user_data['subjects'].values())
     total_playlists = sum(len(subject['playlists']) for subject in st.session_state.user_data['subjects'].values())
     total_pdfs = sum(len(subject['pdfs']) for subject in st.session_state.user_data['subjects'].values())
@@ -720,12 +844,10 @@ def render_analytics_dashboard():
     
         st.subheader("Study Time Trends")
         
-        # Process session data
         sessions_df = pd.DataFrame(st.session_state.user_data['study_sessions'])
         sessions_df['date'] = pd.to_datetime(sessions_df['date'])
         sessions_df['duration_minutes'] = sessions_df['duration'] / 60
         
-        # Daily study time
         daily_study = sessions_df.groupby(sessions_df['date'].dt.date)['duration_minutes'].sum().reset_index()
         daily_study.columns = ['date', 'minutes']
         
@@ -739,7 +861,6 @@ def render_analytics_dashboard():
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
         
-        # Weekly summary
         st.subheader("Weekly Study Summary")
         sessions_df['week'] = sessions_df['date'].dt.isocalendar().week
         weekly_study = sessions_df.groupby('week')['duration_minutes'].sum().reset_index()
@@ -777,7 +898,6 @@ def render_analytics_dashboard():
     if subject_stats:
         df = pd.DataFrame(subject_stats)
         
-        # Progress chart
         fig3 = px.bar(
             df,
             x='Subject',
@@ -787,9 +907,7 @@ def render_analytics_dashboard():
             color_continuous_scale='RdYlGn'
         )
         fig3.update_layout(height=400)
-        st.plotly_chart(fig3, use_container_width=True)
-        
-        # Data table
+        st.plotly_chart(fig3, use_container_width=True)        
         st.subheader("Detailed Subject Statistics")
         st.dataframe(df, use_container_width=True)
     
@@ -800,22 +918,17 @@ def render_analytics_dashboard():
         col1, col2 = st.columns(2)
         
         with col1:
-            # Average session duration
             avg_duration = sessions_df['duration_minutes'].mean()
             st.metric("Average Session Duration", f"{avg_duration:.1f} minutes")
             
-            # Most productive day
             day_productivity = sessions_df.groupby(sessions_df['date'].dt.day_name())['duration_minutes'].sum()
             most_productive_day = day_productivity.idxmax()
             st.metric("Most Productive Day", most_productive_day)
         
         with col2:
-            # Total sessions this week
             current_week = datetime.datetime.now().isocalendar()[1]
             this_week_sessions = sessions_df[sessions_df['date'].dt.isocalendar().week == current_week]
             st.metric("This Week's Sessions", len(this_week_sessions))
-            
-            # Longest session
             longest_session = sessions_df['duration_minutes'].max()
             st.metric("Longest Session", f"{longest_session:.1f} minutes")
 
@@ -870,7 +983,6 @@ def render_login_page():
 
 def main():
     """Main application function"""
-    # Initialize session state
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     
@@ -878,15 +990,11 @@ def main():
         render_login_page()
         return
     
-    # Load user data if not already loaded
     if 'user_data' not in st.session_state:
         st.session_state.user_data = data_manager.load_user_data(st.session_state.username)
-    
-    # Render main application
     render_header()      
     render_sidebar()
 
-    # Navigation
     if st.session_state.get('show_analytics', False):
         render_analytics_dashboard()
         if st.button("🔙 Back to Subjects"):
@@ -894,7 +1002,6 @@ def main():
             st.rerun()
     else:
         render_subject_content()
-        # Analytics button
         if st.button("📊 View Analytics Dashboard"):
             st.session_state.show_analytics = True
             st.rerun()
@@ -902,12 +1009,11 @@ def main():
         
 
     
-    # Auto-save user data periodically
     if 'last_save' not in st.session_state:
         st.session_state.last_save = time.time()
     
     current_time = time.time()
-    if current_time - st.session_state.last_save > 60:  # Save every minute
+    if current_time - st.session_state.last_save > 60:  
         data_manager.save_user_data(st.session_state.username, st.session_state.user_data)
         st.session_state.last_save = current_time
 
